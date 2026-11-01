@@ -1,131 +1,137 @@
+from datetime import datetime, timezone
 import psycopg2
 from flask import Flask, redirect, render_template_string, url_for
 
 app = Flask(__name__)
 
-# Votre chaîne de connexion PostgreSQL Aiven
-DATABASE_URL = "postgres://avnadmin:VOTRE_MOT_DE_PASSE@pg-368b4833-bastianbary17-5fbd.e.aivencloud.com:18969/defaultdb?sslmode=require"
+DATABASE_URL = "postgres://avnadmin:AVNS__GlfxlePDxDk14ehlKA@pg-368b4833-bastianbary17-5fbd.e.aivencloud.com:18969/defaultdb?sslmode=require"
 
-
-def verifier_et_creer_table():
-    """S'assure que la table de contrôle existe dans la base."""
+def obtenir_infos_etat():
+    """Récupère le statut et calcule si le PC est en ligne (dernier signal < 15 min)."""
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS controle_script (
-                id INT PRIMARY KEY,
-                statut VARCHAR(20) DEFAULT 'RUNNING'
-            );
-        """
-        )
-        cur.execute(
-            """
-            INSERT INTO controle_script (id, statut) VALUES (1, 'RUNNING')
-            ON CONFLICT (id) DO NOTHING;
-        """
-        )
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        print(f"Erreur d'initialisation de la table : {e}")
-
-
-def obtenir_statut():
-    try:
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor()
-        # S'assure que la table existe à la volée
+        
+        # S'assure que la table existe
         cur.execute("""
             CREATE TABLE IF NOT EXISTS controle_script (
                 id INT PRIMARY KEY,
-                statut VARCHAR(20) DEFAULT 'RUNNING'
+                statut VARCHAR(20) DEFAULT 'RUNNING',
+                dernier_signal TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
         cur.execute("INSERT INTO controle_script (id, statut) VALUES (1, 'RUNNING') ON CONFLICT (id) DO NOTHING;")
         conn.commit()
         
-        cur.execute("SELECT statut FROM controle_script WHERE id = 1;")
+        cur.execute("SELECT statut, dernier_signal FROM controle_script WHERE id = 1;")
         res = cur.fetchone()
         cur.close()
         conn.close()
-        return res[0] if res else "UNKNOWN"
+        
+        if not res:
+            return "UNKNOWN", False
+            
+        statut = res[0]
+        dernier_signal = res[1]
+        
+        # Vérifie si le PC a envoyé un signal il y a moins de 15 minutes (900 secondes)
+        pc_en_ligne = False
+        if dernier_signal:
+            # Assure la compatibilité UTC
+            if dernier_signal.tzinfo is None:
+                dernier_signal = dernier_signal.replace(tzinfo=timezone.utc)
+            delta = datetime.now(timezone.utc) - dernier_signal
+            if delta.total_seconds() < 900:
+                pc_en_ligne = True
+                
+        return statut, pc_en_ligne
     except Exception as e:
-        print(f"Erreur détaillée : {e}")
-        return "ERROR"
+        return f"ERROR: {e}", False
 
+@app.route("/")
+def index():
+    statut, pc_en_ligne = obtenir_infos_etat()
+    
+    html_template = """
+    <!DOCTYPE html>
+    <html lang="fr">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Panneau de Contrôle - Agent</title>
+        <style>
+            body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; background-color: #f4f4f9; }
+            .card { background: white; padding: 30px; border-radius: 12px; display: inline-block; box-shadow: 0 4px 8px rgba(0,0,0,0.1); width: 350px; }
+            .badge { font-weight: bold; padding: 6px 12px; border-radius: 6px; display: inline-block; margin-top: 5px; }
+            .running { color: #155724; background-color: #d4edda; }
+            .stop { color: #721c24; background-color: #f8d7da; }
+            .online { color: #0c5460; background-color: #d1ecf1; }
+            .offline { color: #856404; background-color: #fff3cd; }
+            button { width: 100%; padding: 12px; font-size: 1em; border: none; border-radius: 6px; cursor: pointer; margin-top: 15px; }
+            .btn-stop { background-color: #dc3545; color: white; }
+            .btn-start { background-color: #28a745; color: white; }
+            .btn-delete { background-color: #6c757d; color: white; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h2>Panneau de Contrôle</h2>
+            
+            <p>Statut du script :<br>
+                <span class="badge {{ 'running' if statut == 'RUNNING' else 'stop' }}">{{ statut }}</span>
+            </p>
+            
+            <p>État de la machine :<br>
+                <span class="badge {{ 'online' if pc_en_ligne else 'offline' }}">
+                    {{ '🟢 En ligne (Allumé)' if pc_en_ligne else '🔴 Hors ligne (Éteint / Inactif)' }}
+                </span>
+            </p>
+            
+            <form action="/toggle" method="POST">
+                {% if statut == 'RUNNING' %}
+                    <button type="submit" class="btn-stop">🔴 Envoyer l'ordre d'ARRÊT</button>
+                {% else %}
+                    <button type="submit" class="btn-start">🟢 Relancer le script</button>
+                {% endif %}
+            </form>
 
-def modifier_statut(nouveau_statut):
-    """Met à jour le statut ('RUNNING' ou 'STOP') dans la base."""
+            <form action="/supprimer-photos" method="POST" onsubmit="return confirm('Voulez-vous vraiment vider toutes les captures de la base de données ?');">
+                <button type="submit" class="btn-delete">🗑️ Supprimer toutes les photos</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    """
+    return render_template_string(html_template, statut=statut, pc_en_ligne=pc_en_ligne)
+
+@app.route("/toggle", methods=["POST"])
+def toggle():
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
-        cur.execute(
-            "UPDATE controle_script SET statut = %s WHERE id = 1;",
-            (nouveau_statut,),
-        )
+        cur.execute("SELECT statut FROM controle_script WHERE id = 1;")
+        actuel = cur.fetchone()[0]
+        nouveau = "STOP" if actuel == "RUNNING" else "RUNNING"
+        cur.execute("UPDATE controle_script SET statut = %s WHERE id = 1;", (nouveau,))
         conn.commit()
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erreur de modification du statut : {e}")
-
-
-# Page HTML intégrée directement dans le code
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Contrôle du Script de Capture</title>
-    <style>
-        body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; background-color: #f4f4f9; }
-        .card { background: white; padding: 30px; border-radius: 12px; display: inline-block; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-        .status { font-weight: bold; font-size: 1.2em; padding: 5px 10px; border-radius: 4px; }
-        .running { color: green; background-color: #e6ffe6; }
-        .stop { color: red; background-color: #ffe6e6; }
-        button { padding: 12px 24px; font-size: 1em; border: none; border-radius: 6px; cursor: pointer; margin: 10px; }
-        .btn-stop { background-color: #ff4d4d; color: white; }
-        .btn-start { background-color: #4caf50; color: white; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Panneau de Contrôle</h1>
-        <p>Statut actuel du script : 
-            <span class="status {{ 'running' if statut == 'RUNNING' else 'stop' }}">{{ statut }}</span>
-        </p>
-        
-        <form action="/toggle" method="POST">
-            {% if statut == 'RUNNING' %}
-                <button type="submit" class="btn-stop">🔴 Arrêter le script</button>
-            {% else %}
-                <button type="submit" class="btn-start">🟢 Relancer le script</button>
-            {% endif %}
-        </form>
-    </div>
-</body>
-</html>
-"""
-
-
-@app.route("/")
-def index():
-    statut = obtenir_statut()
-    return render_template_string(HTML_TEMPLATE, statut=statut)
-
-
-@app.route("/toggle", methods=["POST"])
-def toggle():
-    statut_actuel = obtenir_statut()
-    nouveau_statut = "STOP" if statut_actuel == "RUNNING" else "RUNNING"
-    modifier_statut(nouveau_statut)
+        print(f"Erreur toggle : {e}")
     return redirect(url_for("index"))
 
+@app.route("/supprimer-photos", methods=["POST"])
+def supprimer_photos():
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM captures_test;")
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Erreur suppression : {e}")
+    return redirect(url_for("index"))
 
 if __name__ == "__main__":
-    verifier_et_creer_table()
     app.run(host="0.0.0.0", port=5000, debug=True)
