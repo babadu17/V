@@ -34,17 +34,26 @@ def verifier_et_creer_table():
 
 
 def obtenir_statut():
-    """Lit le statut actuel dans la base de données."""
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
+        # S'assure que la table existe à la volée
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS controle_script (
+                id INT PRIMARY KEY,
+                statut VARCHAR(20) DEFAULT 'RUNNING'
+            );
+        """)
+        cur.execute("INSERT INTO controle_script (id, statut) VALUES (1, 'RUNNING') ON CONFLICT (id) DO NOTHING;")
+        conn.commit()
+        
         cur.execute("SELECT statut FROM controle_script WHERE id = 1;")
         res = cur.fetchone()
         cur.close()
         conn.close()
         return res[0] if res else "UNKNOWN"
     except Exception as e:
-        print(f"Erreur de lecture du statut : {e}")
+        print(f"Erreur détaillée : {e}")
         return "ERROR"
 
 
