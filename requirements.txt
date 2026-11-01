@@ -1,0 +1,11 @@
+# Dépendances pour la capture d'écran et la manipulation d'images
+Pillow>=10.0.0
+
+# Connexion à la base de données PostgreSQL
+psycopg2-binary>=2.9.0
+
+# Framework web pour le site de contrôle
+Flask>=3.0.0
+
+# Compilation du script en .exe sous Windows (optionnel)
+pyinstaller>=6.0.0
