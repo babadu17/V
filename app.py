@@ -35,13 +35,13 @@ def obtenir_infos_etat():
         dernier_signal = res[1]
         
         # Vérifie si le PC a envoyé un signal il y a moins de 15 minutes (900 secondes)
+        # Vérifie si le PC a envoyé un signal il y a moins de 2 minutes (120 secondes)
         pc_en_ligne = False
         if dernier_signal:
-            # Assure la compatibilité UTC
             if dernier_signal.tzinfo is None:
                 dernier_signal = dernier_signal.replace(tzinfo=timezone.utc)
             delta = datetime.now(timezone.utc) - dernier_signal
-            if delta.total_seconds() < 900:
+            if delta.total_seconds() < 120:  # 2 minutes au lieu de 15
                 pc_en_ligne = True
                 
         return statut, pc_en_ligne
